@@ -11,7 +11,7 @@ A Python project for detecting configured items in camera or video streams. It u
 - Track detections between frames and count newly created tracks.
 - Read current in-memory counts with `snapshot()`.
 - Write a JSON and CSV count report when a live detection session ends.
-- Prepare, train, and inspect YOLO-format datasets with the included helper scripts.
+- Prepare, train, and inspect YOLO-format datasets with the supplementary helper scripts.
 
 ## Requirements
 
@@ -19,21 +19,24 @@ A Python project for detecting configured items in camera or video streams. It u
 - A working webcam for live camera use. OpenCV must support the chosen camera or stream.
 - A custom YOLO model trained for the classes you intend to detect.
 
-Install the primary dependencies:
+Create an environment and install the pinned runtime dependencies:
 
 ```bash
-python -m pip install ultralytics opencv-python numpy PyYAML requests
+python -m venv .venv
+python -m pip install -r requirements.txt
 ```
 
-The tracker can use SciPy and FilterPy when installed, and falls back to simpler matching when they are unavailable:
+On Windows PowerShell, activate the environment with `.venv\\Scripts\\Activate.ps1`. On macOS or Linux, use `source .venv/bin/activate`.
+
+The tracker can use SciPy and FilterPy for Kalman filtering and optimal assignment. The default tracker still works without them:
 
 ```bash
-python -m pip install scipy filterpy
+python -m pip install -r requirements-tracking.txt
 ```
 
 ## Configure a model and dataset
 
-Place your trained model at `models/best.pt` and create a `data.yaml` beside `app.py`. The order of the class names must match the zero-based class indices used when training the model. Keep indices contiguous; do not leave gaps.
+Copy `data.yaml.example` to `data.yaml`, then edit it for your dataset. By default, the app looks for custom weights at `coffee_model_final.pt` in the project root. If you store them at `models/best.pt`, pass that path to `CoffeeDetectionAgent` as shown below. The order of class names must match the zero-based class indices used when training the model. Keep indices contiguous; the application rejects gaps instead of silently compressing them.
 
 Example for two classes:
 
@@ -48,7 +51,7 @@ names:
 
 This public release excludes local datasets and model files. Use images and weights that you have permission to use, and check the relevant framework and model license terms.
 
-**Important:** If `models/best.pt` is missing, the current code falls back to the generic `yolov8n.pt` model. That model is not trained for your custom classes, and the fallback class-name mapping can make predictions misleading. Add and verify a compatible custom model before relying on the detections or counts.
+**Important:** When custom weights are missing or fail to load, the application may load generic `yolov8n.pt` weights as a training starting point. It does not relabel those generic model classes, and both inference methods refuse to run until compatible custom weights load successfully. This avoids treating generic detections as your custom classes.
 
 ## Detect objects in an image
 
@@ -94,19 +97,23 @@ Prepare a YOLO-format dataset and `data.yaml`, then run:
 python retrain.py --data data.yaml --epochs 50 --imgsz 640
 ```
 
-Optional arguments include `--device cpu` or a GPU index such as `--device 0`, and `--resume`. The current training helper logs exceptions instead of returning a failing exit status, so a successful process exit does not prove training completed. Review the output and resulting weights yourself.
+Optional arguments include `--device cpu` or a GPU index such as `--device 0`, and `--resume`. Training errors are logged and re-raised, so failed training returns a non-zero process status. Review the output and resulting weights yourself.
 
 Several dataset helpers rewrite label files or move files. Back up your dataset and review each script before running it.
 
-## Included source
+## Code layout
 
-The release includes 22 reviewed root-level Python source scripts, including the detection agent, tracker, training/data-preparation helpers, and manual demonstration scripts. Three scripts with hard-coded local product classes (`get_coffee_dataset.py`, `generate_synthetic_coffee.py`, and `test_app_run.py`) are excluded. The included `test_*.py` files are manual scripts that may need a camera or local sample data; they are not an automated test suite.
+The reusable core is `app.py` (detection, counting, reports), `tracker.py` (track association), and `retrain.py` (training command). `data.yaml.example`, `requirements.txt`, and `tests/` provide the starter configuration, pinned direct dependencies, and automated unit tests.
+
+The other root-level Python files are supplementary data-preparation, reporting, tuning, or manual demo scripts. Some rewrite or move dataset files; back up your dataset and inspect a helper before running it. Three scripts with hard-coded local product classes (`get_coffee_dataset.py`, `generate_synthetic_coffee.py`, and `test_app_run.py`) are excluded. The included root-level `test_*.py` files are manual demos, not the automated suite.
 
 The repository does not include the nested `coffai-entr` application, local datasets or augmented images, model weights, training runs, reports, caches, generated files, local backups, or the machine-specific training output directory.
 
 ## Known limitations
 
-- There is no automated test suite, dependency lockfile, or measured accuracy benchmark.
+- Run the automated unit suite with `python -m unittest discover -s tests -v`.
+- Runtime dependencies are directly pinned; pip resolves transitive dependencies, so there is no platform-specific full lockfile.
+- No measured accuracy benchmark is included.
 - Tracking uses image-space detections; camera movement and overlapping objects can affect counts.
 - Counts are held in memory and the daily report is a session snapshot, not a persistent daily total.
 - The checked-in local dataset configuration was not included. Create and validate your own `data.yaml`, ensuring the class order matches the model.
@@ -115,4 +122,3 @@ The repository does not include the nested `coffai-entr` application, local data
 ## License
 
 No license has been selected for this project yet.
-

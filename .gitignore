@@ -5,6 +5,7 @@ venv/
 .env
 .env.*
 !.env.example
+data.yaml
 *.pt
 *.pth
 *.onnx

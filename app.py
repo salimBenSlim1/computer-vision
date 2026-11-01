@@ -72,44 +72,8 @@ class CoffeeDetectionAgent:
         # store data_yaml path so model loader can use it to set model.names
         self.data_yaml = Path(data_yaml)
         self.config = config or DetectionConfig()
-        # Load class names from `data.yaml` (preferred) and set both the
-        # ordered `_data_names` and `config.allowed_classes`. Keep a safe
-        # fallback to the original three classes if anything goes wrong.
-        try:
-            if self.data_yaml.exists():
-                with open(self.data_yaml, "r", encoding="utf8") as f:
-                    data = yaml.safe_load(f) or {}
-                names = []
-                names_raw = data.get("names")
-                
-                if isinstance(names_raw, dict):
-                    # keys may be integers or strings; extract by numeric order
-                    try:
-                        # try int keys first
-                        max_k = max((int(k) if isinstance(k, int) else int(k) for k in names_raw.keys()), default=-1)
-                        names = [names_raw.get(i) or names_raw.get(str(i)) for i in range(max_k + 1)]
-                        names = [n for n in names if n is not None]
-                    except (ValueError, TypeError):
-                        # fallback: just extract values
-                        names = list(names_raw.values())
-                elif isinstance(names_raw, list):
-                    names = list(names_raw)
-
-                if names:
-                    # ordered list of class names from the dataset YAML
-                    self._data_names = list(names)
-                    # set allowed_classes to the full dataset set
-                    self.config.allowed_classes = set(self._data_names)
-                    logger.info("✓ Loaded %d classes from %s", len(self._data_names), str(self.data_yaml))
-                else:
-                    raise ValueError("no names found in data.yaml")
-            else:
-                raise FileNotFoundError("data.yaml not present")
-        except Exception as e:
-            # fallback to previous small set and ensure ordered list exists
-            logger.warning("Falling back to default classes — %s: %s", type(e).__name__, str(e))
-            self.config.allowed_classes = {"cup", "espresso", "cappuccino"}
-            self._data_names = list(self.config.allowed_classes)
+        self._data_names = self._load_class_names()
+        self.config.allowed_classes = set(self._data_names)
 
         # Compute derived initial_count_conf if not provided
         if self.config.initial_count_conf is None:
@@ -122,6 +86,7 @@ class CoffeeDetectionAgent:
         self._lock = Lock()
 
         self._model: Optional[YOLO] = None
+        self._custom_model_loaded = False
         self._load_model()
 
         # Ensure reports directory
@@ -132,44 +97,68 @@ class CoffeeDetectionAgent:
         # max_age uses cooldown_seconds to expire old tracks
         self.tracker = Tracker(max_age=self.config.cooldown_seconds * 3, iou_threshold=0.3)
 
+    def _load_class_names(self):
+        """Read class names and reject mappings that cannot match YOLO indices."""
+        if not self.data_yaml.is_file():
+            logger.warning("No data.yaml found at %s; using default class names", self.data_yaml)
+            return ["cup", "espresso", "cappuccino"]
+
+        with open(self.data_yaml, "r", encoding="utf8") as f:
+            data = yaml.safe_load(f) or {}
+
+        names_raw = data.get("names")
+        if isinstance(names_raw, dict):
+            try:
+                indices = [int(key) for key in names_raw]
+            except (TypeError, ValueError) as exc:
+                raise ValueError("data.yaml class IDs must be integers starting at 0") from exc
+            if sorted(indices) != list(range(len(indices))):
+                raise ValueError("data.yaml class IDs must be contiguous and start at 0")
+            names_by_index = {int(key): value for key, value in names_raw.items()}
+            names = [names_by_index[index] for index in range(len(indices))]
+        elif isinstance(names_raw, list):
+            names = list(names_raw)
+        else:
+            raise ValueError("data.yaml must define class names as a list or indexed mapping")
+
+        if not names or any(not isinstance(name, str) or not name.strip() for name in names):
+            raise ValueError("data.yaml class names must be non-empty strings")
+
+        logger.info("Loaded %d classes from %s", len(names), self.data_yaml)
+        return names
+
     # ---------------------- Model Loading ----------------------
     def _load_model(self) -> None:
-        """Try to load a custom model, else fall back to `yolov8n.pt`.
-
-        Keeps counters initialized from model class names when available.
-        """
-        try:
-            if self.model_path.exists():
-                logger.info("Loading custom model from %s", self.model_path)
-                self._model = YOLO(str(self.model_path))
-            else:
-                logger.warning("Custom model not found at %s — using pretrained yolov8n", self.model_path)
-                self._model = YOLO("yolov8n.pt")
-
-            # If we have names from data.yaml, override the model's names mapping
-            try:
-                if hasattr(self, '_data_names') and self._data_names:
-                    # build dict mapping index->name
-                    names_dict = {i: n for i, n in enumerate(self._data_names)}
-                    # assign to model so subsequent code uses dataset names
-                    try:
-                        # override model names mapping
-                        self._model.names = names_dict
-                        logger.info("Model names overridden with %d dataset names", len(names_dict))
-                    except Exception:
-                        # best-effort, ignore if model doesn't allow assignment
-                        pass
-
-            except Exception:
-                # ignore any failure in name overriding
-                pass
-
-            # Initialize counters for allowed classes
-            for class_name in self.config.allowed_classes:
-                self._counters.setdefault(class_name, 0)
-        except Exception as exc:  # defensive: fallback
-            logger.exception("Model load failed, falling back to yolov8n: %s", exc)
+        """Load custom weights, or the generic base model for training only."""
+        if self.model_path.is_file():
+            logger.info("Loading custom model from %s", self.model_path)
+            self._model = YOLO(str(self.model_path))
+            model_names = getattr(self._model, "names", None)
+            if model_names is None or len(model_names) != len(self._data_names):
+                raise ValueError(
+                    "Custom model class count must match the names in data.yaml"
+                )
+            self._model.names = {
+                index: name for index, name in enumerate(self._data_names)
+            }
+            self._custom_model_loaded = True
+        else:
+            logger.warning(
+                "Custom model not found at %s; using pretrained yolov8n for training only",
+                self.model_path,
+            )
             self._model = YOLO("yolov8n.pt")
+            self._custom_model_loaded = False
+
+        for class_name in self.config.allowed_classes:
+            self._counters.setdefault(class_name, 0)
+
+    def _require_custom_model(self) -> None:
+        if not self._custom_model_loaded:
+            raise RuntimeError(
+                "A custom trained model is required for inference. "
+                "Set model_path to compatible custom weights."
+            )
 
     # ---------------------- Dataset Helpers / Training Stub ----------------------
     def setup_dataset(self, dataset_path: str = "coffee_dataset") -> None:
@@ -203,6 +192,7 @@ class CoffeeDetectionAgent:
             logger.info("Training completed")
         except Exception as exc:
             logger.exception("Training failed: %s", exc)
+            raise
 
     # ---------------------- Counting Helpers ----------------------
     def _calculate_iou(self, box1: Tuple[float, float, float, float], box2: Tuple[float, float, float, float]) -> float:
@@ -294,6 +284,7 @@ class CoffeeDetectionAgent:
     # ---------------------- Inference Helpers ----------------------
     def test_on_image(self, image_path: str, show: bool = False):
         """Run detection on a single image and return structured detections."""
+        self._require_custom_model()
         if self._model is None:
             raise RuntimeError("Model not loaded")
 
@@ -320,6 +311,7 @@ class CoffeeDetectionAgent:
 
     def start_detection(self, source=0, save_video: Optional[str] = None):
         """Start live detection loop. `source` can be camera index or RTSP URL."""
+        self._require_custom_model()
         if self._model is None:
             raise RuntimeError("Model not loaded — cannot start detection")
 
