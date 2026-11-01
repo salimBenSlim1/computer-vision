@@ -100,7 +100,7 @@ Several dataset helpers rewrite label files or move files. Back up your dataset 
 
 ## Included source
 
-The release includes the root-level Python source scripts, including the detection agent, tracker, training/data-preparation helpers, and manual demonstration scripts. The `test_*.py` files are manual scripts that may need a camera or local sample data; they are not an automated test suite.
+The release includes 22 reviewed root-level Python source scripts, including the detection agent, tracker, training/data-preparation helpers, and manual demonstration scripts. Three scripts with hard-coded local product classes (`get_coffee_dataset.py`, `generate_synthetic_coffee.py`, and `test_app_run.py`) are excluded. The included `test_*.py` files are manual scripts that may need a camera or local sample data; they are not an automated test suite.
 
 The repository does not include the nested `coffai-entr` application, local datasets or augmented images, model weights, training runs, reports, caches, generated files, local backups, or the machine-specific training output directory.
 
@@ -115,3 +115,4 @@ The repository does not include the nested `coffai-entr` application, local data
 ## License
 
 No license has been selected for this project yet.
+
