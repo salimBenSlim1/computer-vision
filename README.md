@@ -115,4 +115,3 @@ The repository does not include the nested `coffai-entr` application, local data
 ## License
 
 No license has been selected for this project yet.
-
